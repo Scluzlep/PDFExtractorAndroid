@@ -39,7 +39,7 @@ android {
     }
 
     // 将所有打包规则合并到一个代码块，并移动到 android { ... } 内部
-    packagingOptions {
+    packaging {
         resources {
             // 忽略所有重复的元数据文件，这是处理 PDFBox 等库的标准做法
             excludes.add("META-INF/DEPENDENCIES")
@@ -58,8 +58,8 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
 
-    // 引入 libs 文件夹下的所有 .jar 文件
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
+// 引入专门为安卓适配的 PDFBox 库，它不依赖 java.awt
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
 
     // 测试库
     testImplementation("junit:junit:4.13.2")

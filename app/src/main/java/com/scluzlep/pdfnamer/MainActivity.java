@@ -3,13 +3,13 @@ package com.scluzlep.pdfnamer;
 import android.Manifest;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.text.method.ScrollingMovementMethod;
-import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
@@ -20,20 +20,22 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDResources;
-import org.apache.pdfbox.pdmodel.graphics.PDXObject;
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
-import org.apache.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem;
-import org.apache.pdfbox.cos.COSName;
+import com.tom_roush.pdfbox.cos.COSName;
+import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.pdmodel.PDPage;
+import com.tom_roush.pdfbox.pdmodel.PDResources;
+import com.tom_roush.pdfbox.pdmodel.graphics.PDXObject;
+import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDDocumentOutline;
+import com.tom_roush.pdfbox.pdmodel.interactive.documentnavigation.outline.PDOutlineItem;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
@@ -48,7 +50,11 @@ public class MainActivity extends AppCompatActivity {
     private EditText editTextPath;
     private TextView textViewLog;
 
-    // 使用现代的 ActivityResultLauncher 来处理文件选择
+    // 日志缓冲区 & 节流控制
+    private final StringBuilder logBuffer = new StringBuilder(4096);
+    private long lastFlush = 0;               // 上次刷新到 UI 的时间戳
+    private static final long LOG_FLUSH_INTERVAL_MS = 500; // 500ms 刷一次
+
     private final ActivityResultLauncher<Intent> filePickerLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
             result -> {
@@ -60,13 +66,11 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
 
-    // 权限请求 Launcher
     private final ActivityResultLauncher<String> requestPermissionLauncher = registerForActivityResult(
             new ActivityResultContracts.RequestPermission(),
             isGranted -> {
-                if(isGranted) {
-                    Toast.makeText(this, "权限已授予", Toast.LENGTH_SHORT).show();
-                    startExtractionFromPath();
+                if (isGranted) {
+                    Toast.makeText(this, "权限已授予，请再次点击按钮开始提取。", Toast.LENGTH_SHORT).show();
                 } else {
                     logMessage("错误: 必须授予存储权限才能从路径提取。");
                 }
@@ -82,9 +86,8 @@ public class MainActivity extends AppCompatActivity {
         buttonStartFromPath = findViewById(R.id.button_start_from_path);
         editTextPath = findViewById(R.id.edit_text_path);
         textViewLog = findViewById(R.id.text_view_log);
-        textViewLog.setMovementMethod(new ScrollingMovementMethod()); // 让日志区域可以滚动
+        textViewLog.setMovementMethod(new ScrollingMovementMethod());
 
-        // 按钮点击事件
         buttonSelectFile.setOnClickListener(v -> openFilePicker());
         buttonStartFromPath.setOnClickListener(v -> startExtractionFromPath());
     }
@@ -116,10 +119,14 @@ public class MainActivity extends AppCompatActivity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) { // Android 11+
             if (!Environment.isExternalStorageManager()) {
                 logMessage("需要“所有文件访问权限”...");
-                Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
-                intent.setData(Uri.parse("package:" + getPackageName()));
-                startActivity(intent); // 用户将被引导至设置页面
-                Toast.makeText(this, "请在此页面授予权限后重试", Toast.LENGTH_LONG).show();
+                try {
+                    Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                    intent.setData(Uri.parse("package:" + getPackageName()));
+                    startActivity(intent);
+                    Toast.makeText(this, "请在此页面授予权限后重试", Toast.LENGTH_LONG).show();
+                } catch (Exception e) {
+                    logMessage("无法打开权限设置页面，请手动授予权限。");
+                }
                 return false;
             }
             return true;
@@ -138,7 +145,6 @@ public class MainActivity extends AppCompatActivity {
         logMessage("初始化提取任务...");
         setUiEnabled(false);
 
-        // 在后台线程中执行耗时操作
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
             try {
@@ -153,10 +159,16 @@ public class MainActivity extends AppCompatActivity {
                     displayName = file.getName();
                 }
 
+                if (inputStream == null) {
+                    logMessage("错误：无法打开文件输入流。");
+                    runOnUiThread(() -> setUiEnabled(true));
+                    return;
+                }
+
                 logMessage("正在处理文件: " + displayName);
                 File outputDir = createOutputDirectory(displayName);
                 if (outputDir == null) {
-                    logMessage("错误: 无法创建输出目录。");
+                    runOnUiThread(() -> setUiEnabled(true));
                     return;
                 }
                 logMessage("图片将保存至: " + outputDir.getAbsolutePath());
@@ -181,39 +193,84 @@ public class MainActivity extends AppCompatActivity {
                             if (xObject instanceof PDImageXObject) {
                                 PDImageXObject image = (PDImageXObject) xObject;
                                 String sanitizedTitle = title.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-                                String fileName = String.format("%03d-%s.%s", imageCounter++, sanitizedTitle, image.getSuffix());
+                                String suffix = image.getSuffix() != null ? image.getSuffix() : "jpg";
+                                String fileName = String.format(Locale.US, "%03d-%s.%s", imageCounter++, sanitizedTitle, suffix);
                                 File outputFile = new File(outputDir, fileName);
 
-                                try (OutputStream out = new FileOutputStream(outputFile)) {
-                                    image.getImage().createGraphics().drawImage(image.getImage(), 0, 0, null);
-                                    javax.imageio.ImageIO.write(image.getImage(), image.getSuffix(), out);
+                                // 保持 PNG/JPEG 输出，解码后立即释放 Bitmap
+                                try {
+                                    Bitmap bitmap = image.getImage();
+                                    if (bitmap != null) {
+                                        Bitmap.CompressFormat format = Bitmap.CompressFormat.JPEG;
+                                        if ("png".equalsIgnoreCase(suffix)) {
+                                            format = Bitmap.CompressFormat.PNG;
+                                        }
+                                        try (OutputStream out = new FileOutputStream(outputFile)) {
+                                            bitmap.compress(format, 95, out);
+                                        }
+                                        // ★ 立刻回收，降低 native-heap 峰值
+                                        bitmap.recycle();
+                                        bitmap = null;
+                                        logMessage("已保存: " + outputFile.getName());
+                                    } else {
+                                        logMessage("警告: 无法解码图片 " + cosName.getName());
+                                    }
+                                } catch (IOException e) {
+                                    logMessage("错误: 保存图片时发生 IO 异常 " + outputFile.getName() + " - " + e.getMessage());
                                 }
-                                logMessage("已保存: " + outputFile.getName());
                             }
                         }
                     }
                     logMessage("\n处理完成！");
                 }
-            } catch (IOException e) {
+            } catch (Exception e) { // 捕获所有可能的异常
                 logMessage("\n发生严重错误: " + e.getMessage());
-                e.printStackTrace();
+                StringWriter sw = new StringWriter();
+                e.printStackTrace(new PrintWriter(sw));
+                logMessage("堆栈跟踪: " + sw.toString().substring(0, Math.min(sw.toString().length(), 500))); // 打印部分堆栈信息
             } finally {
-                // 确保UI操作在主线程执行
                 runOnUiThread(() -> setUiEnabled(true));
+                flushLogToUi();           // 把剩余日志推到界面
+                executor.shutdown();      // 关闭线程池
             }
         });
     }
 
-    // --- 日志和UI辅助函数 ---
-
+    /**
+     * 日志缓冲并节流输出到 UI
+     */
     private void logMessage(String message) {
+        long now = System.currentTimeMillis();
+        String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(now));
+
+        synchronized (logBuffer) {
+            logBuffer.append(timeStamp).append(" - ").append(message).append('\n');
+            if (now - lastFlush >= LOG_FLUSH_INTERVAL_MS) {
+                flushLogToUi();
+            }
+        }
+    }
+
+    /** 立即将缓冲日志刷新到 TextView */
+    private void flushLogToUi() {
         runOnUiThread(() -> {
-            String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-            textViewLog.append("\n" + timeStamp + " - " + message);
+            textViewLog.setText(logBuffer.toString());
+            // 滚动到底部，方便查看最新日志
+            textViewLog.post(() -> {
+                int scrollAmount = textViewLog.getLayout().getLineTop(textViewLog.getLineCount()) - textViewLog.getHeight();
+                if (scrollAmount > 0)
+                    textViewLog.scrollTo(0, scrollAmount);
+                else
+                    textViewLog.scrollTo(0, 0);
+            });
         });
+        lastFlush = System.currentTimeMillis();
     }
 
     private void clearLogs() {
+        synchronized (logBuffer) {
+            logBuffer.setLength(0);
+        }
         runOnUiThread(() -> textViewLog.setText(""));
     }
 
@@ -225,40 +282,38 @@ public class MainActivity extends AppCompatActivity {
 
     private String getFileNameFromUri(Uri uri) {
         String result = null;
-        if (uri.getScheme().equals("content")) {
+        if (uri.getScheme() != null && uri.getScheme().equals("content")) {
             try (android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null)) {
                 if (cursor != null && cursor.moveToFirst()) {
                     int colIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
                     if (colIndex != -1) {
-                      result = cursor.getString(colIndex);
+                        result = cursor.getString(colIndex);
                     }
                 }
-            }
+            } catch (Exception ignored) {}
         }
         if (result == null) {
             result = uri.getPath();
-            int cut = result.lastIndexOf('/');
-            if (cut != -1) {
-                result = result.substring(cut + 1);
+            if (result != null) {
+                int cut = result.lastIndexOf('/');
+                if (cut != -1) result = result.substring(cut + 1);
             }
         }
-        return result;
+        return result != null ? result : "unknown_file.pdf";
     }
 
     private File createOutputDirectory(String pdfName) {
         String baseName = pdfName.contains(".") ? pdfName.substring(0, pdfName.lastIndexOf('.')) : pdfName;
         File picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES);
         File outputDir = new File(picturesDir, "PdfExtractorOutput/" + baseName);
-        if (!outputDir.exists()) {
-            if (!outputDir.mkdirs()) {
-                return null;
-            }
+        if (!outputDir.exists() && !outputDir.mkdirs()) {
+            logMessage("严重警告: 无法创建目录 " + outputDir.getAbsolutePath());
+            return null;
         }
         return outputDir;
     }
 
-    // --- PDFBox 核心逻辑 (与之前版本相同) ---
-    private static void populatePageTitleMap(PDDocument doc, PDOutlineItem item, Map<Integer, String> map) {
+    private void populatePageTitleMap(PDDocument doc, PDOutlineItem item, Map<Integer, String> map) {
         try {
             PDPage page = item.findDestinationPage(doc);
             if (page != null) {
@@ -268,7 +323,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         } catch (IOException e) {
-            // 在安卓端，我们通过日志输出错误，而不是 System.err
+            logMessage("无法为书签 '" + item.getTitle() + "' 查找页面: " + e.getMessage());
         }
         for (PDOutlineItem child : item.children()) {
             populatePageTitleMap(doc, child, map);
