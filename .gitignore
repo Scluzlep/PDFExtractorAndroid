@@ -115,3 +115,15 @@ gradle-app.setting
 hs_err_pid*
 
 # End of https://www.toptal.com/developers/gitignore/api/android,java,gradle
+
+# =======================================================
+# CUSTOM OVERRIDES TO KEEP ESSENTIAL FILES
+# =======================================================
+# The rules above are too aggressive. We must explicitly
+# un-ignore the JAR files that are essential for the build.
+
+# Rule to keep the Gradle Wrapper engine
+!gradle/wrapper/gradle-wrapper.jar
+
+# Rule to keep all libraries in the app/libs folder
+!app/libs/*.jar
