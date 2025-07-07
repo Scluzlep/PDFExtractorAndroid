@@ -1,0 +1,21 @@
+<!-- 这是图标的前景层，一个矢量图形 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="0.6" android:scaleY="0.6" android:translateX="21.6" android:translateY="21.6">
+        <!-- PDF 文档的轮廓 -->
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M40,0 L70,30 L70,95 C70,97.76 67.76,100 65,100 L5,100 C2.24,100 0,97.76 0,95 L0,5 C0,2.24 2.24,0 5,0 L40,0 Z" />
+        <!-- 文档的折角 -->
+        <path
+            android:fillColor="#FFB0B0B0"
+            android:pathData="M40,0 L70,30 L40,30 C38.34,30 37,28.66 37,27 L37,0 L40,0 Z" />
+        <!-- 中间的“图片”符号 -->
+        <path
+            android:fillColor="#3DDC84"
+            android:pathData="M55,45 L55,75 L15,75 L15,45 L55,45 M50,50 L20,50 L20,65 L30,58 L38,70 L43,64 L50,70 L50,50 Z" />
+    </group>
+</vector>
