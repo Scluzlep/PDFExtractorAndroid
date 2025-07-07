@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -25,14 +26,28 @@ android {
             )
         }
     }
+
+    // 将 compileOptions 移动到 android { ... } 内部
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }
-    // 解决 PDFBox 和安卓构建工具之间的重复类问题
-    packaging {
+
+    // 为 Kotlin 代码添加 jvmTarget 配置
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    // 将所有打包规则合并到一个代码块，并移动到 android { ... } 内部
+    packagingOptions {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // 忽略所有重复的元数据文件，这是处理 PDFBox 等库的标准做法
+            excludes.add("META-INF/DEPENDENCIES")
+            excludes.add("META-INF/LICENSE")
+            excludes.add("META-INF/NOTICE")
+            excludes.add("META-INF/LICENSE.txt")
+            excludes.add("META-INF/NOTICE.txt")
+            excludes.add("/META-INF/{AL2.0,LGPL2.1}")
         }
     }
 }
