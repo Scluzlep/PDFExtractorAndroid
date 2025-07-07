@@ -4,4 +4,6 @@
     <color name="white">#FFFFFFFF</color>
     <!-- 新增图标背景颜色 -->
     <color name="icon_background">#FF2A2A2A</color>
+    <color name="log_background">#F5F5F5</color> <!-- 浅色模式下的日志背景 -->
+    <color name="log_text">#222222</color>       <!-- 浅色模式下的日志文字 -->
 </resources>

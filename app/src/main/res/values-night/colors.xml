@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF222222</color> <!-- 深色模式下的黑色，可以比纯黑更柔和护眼 -->
+    <color name="white">#FFEEEEEE</color> <!-- 深色模式下的白色，建议用偏灰色减少刺眼 -->
+    <!-- 图标背景颜色可适当调整为更深色或加透明度 -->
+    <color name="icon_background">#FF1A1A1A</color>
+    <color name="log_background">#222222</color> <!-- 深色模式下的日志背景 -->
+    <color name="log_text">#EEEEEE</color>       <!-- 深色模式下的日志文字 -->
+</resources>

@@ -50,7 +50,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:background="#F5F5F5"
+        android:background="@color/log_background"
         android:layout_marginTop="8dp">
 
         <TextView
@@ -59,7 +59,8 @@
             android:layout_height="wrap_content"
             android:padding="8dp"
             android:text="请选择一个 PDF 文件开始操作..."
-            android:typeface="monospace" />
+            android:typeface="monospace"
+            android:textColor="@color/log_text" />
     </ScrollView>
 
 </LinearLayout>
