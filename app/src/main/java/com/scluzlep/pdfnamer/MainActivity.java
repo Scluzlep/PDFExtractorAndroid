@@ -55,7 +55,7 @@ public class MainActivity extends AppCompatActivity {
     private long lastFlush = 0;
     private static final long LOG_FLUSH_INTERVAL_MS = 500;
 
-    // **新增**: 保存最后一次的输出目录
+    // 保存最后一次的输出目录，用于导出日志
     private File lastOutputDir = null;
 
     private final ActivityResultLauncher<Intent> filePickerLauncher = registerForActivityResult(
@@ -191,7 +191,7 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> setUiEnabled(true));
                     return;
                 }
-                this.lastOutputDir = outputDir; // **修改**: 保存输出目录
+                this.lastOutputDir = outputDir; // 保存输出目录以供日志导出使用
                 logMessage("图片将保存至: " + outputDir.getAbsolutePath());
 
                 try (PDDocument document = PDDocument.load(inputStream)) {
@@ -203,7 +203,20 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
-                    // ... (图片提取逻辑保持不变)
+                    // 1. 统计所有图片总数，用于后续动态补零
+                    logMessage("正在统计图片总数...");
+                    int totalImages = 0;
+                    for (PDPage page : document.getPages()) {
+                        PDResources resources = page.getResources();
+                        for (COSName cosName : resources.getXObjectNames()) {
+                            if (resources.getXObject(cosName) instanceof PDImageXObject) {
+                                totalImages++;
+                            }
+                        }
+                    }
+                    logMessage("共找到 " + totalImages + " 张图片。");
+                    int numDigits = Math.max(1, String.valueOf(totalImages).length()); // 至少补1位0
+
                     int imageCounter = 1;
                     for (int i = 0; i < document.getNumberOfPages(); i++) {
                         PDPage page = document.getPage(i);
@@ -214,11 +227,18 @@ public class MainActivity extends AppCompatActivity {
                             PDXObject xObject = resources.getXObject(cosName);
                             if (xObject instanceof PDImageXObject) {
                                 PDImageXObject image = (PDImageXObject) xObject;
-                                String sanitizedTitle = title.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+
+                                // 2. 去掉书签中已有的序号，并清理非法字符
+                                String cleanedTitle = title.replaceFirst("^\\d+[- ]*", "").trim();
+                                String sanitizedTitle = cleanedTitle.replaceAll("[\\\\/:*?\"<>|]", "_");
+
+                                // 3. 动态补零并生成文件名
+                                String imageNumberStr = String.format(Locale.US, "%0" + numDigits + "d", imageCounter);
                                 String suffix = image.getSuffix() != null ? image.getSuffix() : "jpg";
-                                String fileName = String.format(Locale.US, "%03d-%s.%s", imageCounter++, sanitizedTitle, suffix);
+                                String fileName = imageNumberStr + "-" + sanitizedTitle + "." + suffix;
                                 File outputFile = new File(outputDir, fileName);
 
+                                // 4. 保存图片
                                 try {
                                     Bitmap bitmap = image.getImage();
                                     if (bitmap != null) {
@@ -236,10 +256,11 @@ public class MainActivity extends AppCompatActivity {
                                 } catch (IOException e) {
                                     logMessage("错误: 保存图片时发生 IO 异常 " + outputFile.getName() + " - " + e.getMessage());
                                 }
+
+                                imageCounter++;
                             }
                         }
                     }
-
                     logMessage("\n处理完成！");
                 }
             } catch (Exception e) {
@@ -256,7 +277,6 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void exportLogs() {
-        // **修改**: 检查是否已执行过提取
         if (this.lastOutputDir == null) {
             Toast.makeText(this, "请先执行一次提取，以确定日志保存位置。", Toast.LENGTH_LONG).show();
             return;
@@ -272,7 +292,6 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        // **修改**: 直接在图片输出目录创建日志文件
         String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
         String fileName = "log_" + timeStamp + ".txt";
         File logFile = new File(this.lastOutputDir, fileName);
