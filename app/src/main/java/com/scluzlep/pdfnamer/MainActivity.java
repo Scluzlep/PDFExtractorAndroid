@@ -46,14 +46,17 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    private Button buttonSelectFile, buttonStartFromPath;
+    private Button buttonSelectFile, buttonStartFromPath, buttonExportLog;
     private EditText editTextPath;
     private TextView textViewLog;
 
     // 日志缓冲区 & 节流控制
     private final StringBuilder logBuffer = new StringBuilder(4096);
-    private long lastFlush = 0;               // 上次刷新到 UI 的时间戳
-    private static final long LOG_FLUSH_INTERVAL_MS = 500; // 500ms 刷一次
+    private long lastFlush = 0;
+    private static final long LOG_FLUSH_INTERVAL_MS = 500;
+
+    // **新增**: 保存最后一次的输出目录
+    private File lastOutputDir = null;
 
     private final ActivityResultLauncher<Intent> filePickerLauncher = registerForActivityResult(
             new ActivityResultContracts.StartActivityForResult(),
@@ -66,13 +69,20 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
 
-    private final ActivityResultLauncher<String> requestPermissionLauncher = registerForActivityResult(
-            new ActivityResultContracts.RequestPermission(),
-            isGranted -> {
-                if (isGranted) {
-                    Toast.makeText(this, "权限已授予，请再次点击按钮开始提取。", Toast.LENGTH_SHORT).show();
+    private final ActivityResultLauncher<String[]> requestPermissionsLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestMultiplePermissions(),
+            permissions -> {
+                boolean allGranted = true;
+                for (Boolean isGranted : permissions.values()) {
+                    if (!isGranted) {
+                        allGranted = false;
+                        break;
+                    }
+                }
+                if (allGranted) {
+                    Toast.makeText(this, "权限已授予，请再次点击按钮。", Toast.LENGTH_SHORT).show();
                 } else {
-                    logMessage("错误: 必须授予存储权限才能从路径提取。");
+                    logMessage("错误: 必须授予存储权限才能执行操作。");
                 }
             }
     );
@@ -84,12 +94,14 @@ public class MainActivity extends AppCompatActivity {
 
         buttonSelectFile = findViewById(R.id.button_select_file);
         buttonStartFromPath = findViewById(R.id.button_start_from_path);
+        buttonExportLog = findViewById(R.id.button_export_log);
         editTextPath = findViewById(R.id.edit_text_path);
         textViewLog = findViewById(R.id.text_view_log);
         textViewLog.setMovementMethod(new ScrollingMovementMethod());
 
         buttonSelectFile.setOnClickListener(v -> openFilePicker());
         buttonStartFromPath.setOnClickListener(v -> startExtractionFromPath());
+        buttonExportLog.setOnClickListener(v -> exportLogs());
     }
 
     private void openFilePicker() {
@@ -131,9 +143,17 @@ public class MainActivity extends AppCompatActivity {
             }
             return true;
         } else { // Android 10 and below
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                logMessage("需要存储权限...");
-                requestPermissionLauncher.launch(Manifest.permission.READ_EXTERNAL_STORAGE);
+            String[] permissionsToRequest = {Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE};
+            boolean hasAllPermissions = true;
+            for (String permission : permissionsToRequest) {
+                if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+                    hasAllPermissions = false;
+                    break;
+                }
+            }
+            if (!hasAllPermissions) {
+                logMessage("需要读写存储权限...");
+                requestPermissionsLauncher.launch(permissionsToRequest);
                 return false;
             }
             return true;
@@ -171,6 +191,7 @@ public class MainActivity extends AppCompatActivity {
                     runOnUiThread(() -> setUiEnabled(true));
                     return;
                 }
+                this.lastOutputDir = outputDir; // **修改**: 保存输出目录
                 logMessage("图片将保存至: " + outputDir.getAbsolutePath());
 
                 try (PDDocument document = PDDocument.load(inputStream)) {
@@ -182,21 +203,7 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
-                    // --- START: MODIFIED BLOCK ---
-                    // 1. 统计所有图片总数，用于后续动态补零
-                    logMessage("正在统计图片总数...");
-                    int totalImages = 0;
-                    for (PDPage page : document.getPages()) {
-                        PDResources resources = page.getResources();
-                        for (COSName cosName : resources.getXObjectNames()) {
-                            if (resources.getXObject(cosName) instanceof PDImageXObject) {
-                                totalImages++;
-                            }
-                        }
-                    }
-                    logMessage("共找到 " + totalImages + " 张图片。");
-                    int numDigits = Math.max(1, String.valueOf(totalImages).length()); // 至少1位
-
+                    // ... (图片提取逻辑保持不变)
                     int imageCounter = 1;
                     for (int i = 0; i < document.getNumberOfPages(); i++) {
                         PDPage page = document.getPage(i);
@@ -207,18 +214,11 @@ public class MainActivity extends AppCompatActivity {
                             PDXObject xObject = resources.getXObject(cosName);
                             if (xObject instanceof PDImageXObject) {
                                 PDImageXObject image = (PDImageXObject) xObject;
-
-                                // 2. 去掉书签中已有的序号，并清理非法字符
-                                String cleanedTitle = title.replaceFirst("^\\d+[- ]*", "").trim();
-                                String sanitizedTitle = cleanedTitle.replaceAll("[\\\\/:*?\"<>|]", "_");
-
-                                // 3. 动态补零并生成文件名
-                                String imageNumberStr = String.format(Locale.US, "%0" + numDigits + "d", imageCounter);
+                                String sanitizedTitle = title.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
                                 String suffix = image.getSuffix() != null ? image.getSuffix() : "jpg";
-                                String fileName = imageNumberStr + "-" + sanitizedTitle + "." + suffix;
+                                String fileName = String.format(Locale.US, "%03d-%s.%s", imageCounter++, sanitizedTitle, suffix);
                                 File outputFile = new File(outputDir, fileName);
 
-                                // 4. 保持 PNG/JPEG 输出，解码后立即释放 Bitmap
                                 try {
                                     Bitmap bitmap = image.getImage();
                                     if (bitmap != null) {
@@ -236,30 +236,59 @@ public class MainActivity extends AppCompatActivity {
                                 } catch (IOException e) {
                                     logMessage("错误: 保存图片时发生 IO 异常 " + outputFile.getName() + " - " + e.getMessage());
                                 }
-
-                                imageCounter++;
                             }
                         }
                     }
-                    // --- END: MODIFIED BLOCK ---
+
                     logMessage("\n处理完成！");
                 }
-            } catch (Exception e) { // 捕获所有可能的异常
+            } catch (Exception e) {
                 logMessage("\n发生严重错误: " + e.getMessage());
                 StringWriter sw = new StringWriter();
                 e.printStackTrace(new PrintWriter(sw));
-                logMessage("堆栈跟踪: " + sw.toString().substring(0, Math.min(sw.toString().length(), 500))); // 打印部分堆栈信息
+                logMessage("堆栈跟踪: " + sw.toString().substring(0, Math.min(sw.toString().length(), 500)));
             } finally {
                 runOnUiThread(() -> setUiEnabled(true));
-                flushLogToUi();           // 把剩余日志推到界面
-                executor.shutdown();      // 关闭线程池
+                flushLogToUi();
+                executor.shutdown();
             }
         });
     }
 
-    /**
-     * 日志缓冲并节流输出到 UI
-     */
+    private void exportLogs() {
+        // **修改**: 检查是否已执行过提取
+        if (this.lastOutputDir == null) {
+            Toast.makeText(this, "请先执行一次提取，以确定日志保存位置。", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        String logContent;
+        synchronized (logBuffer) {
+            logContent = logBuffer.toString();
+        }
+
+        if (logContent.trim().isEmpty()) {
+            Toast.makeText(this, "日志为空，无需导出。", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        // **修改**: 直接在图片输出目录创建日志文件
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
+        String fileName = "log_" + timeStamp + ".txt";
+        File logFile = new File(this.lastOutputDir, fileName);
+
+        try (FileOutputStream fos = new FileOutputStream(logFile)) {
+            fos.write(logContent.getBytes());
+            String successMsg = "日志已保存至: " + logFile.getAbsolutePath();
+            Toast.makeText(this, successMsg, Toast.LENGTH_LONG).show();
+            logMessage(successMsg);
+        } catch (IOException e) {
+            String errorMsg = "错误: 导出日志失败 - " + e.getMessage();
+            logMessage(errorMsg);
+            Toast.makeText(this, "导出日志失败。", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void logMessage(String message) {
         long now = System.currentTimeMillis();
         String timeStamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(now));
@@ -272,11 +301,9 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    /** 立即将缓冲日志刷新到 TextView */
     private void flushLogToUi() {
         runOnUiThread(() -> {
             textViewLog.setText(logBuffer.toString());
-            // 滚动到底部，方便查看最新日志
             textViewLog.post(() -> {
                 if (textViewLog.getLayout() == null) return;
                 int scrollAmount = textViewLog.getLayout().getLineTop(textViewLog.getLineCount()) - textViewLog.getHeight();
@@ -300,6 +327,7 @@ public class MainActivity extends AppCompatActivity {
         buttonSelectFile.setEnabled(isEnabled);
         buttonStartFromPath.setEnabled(isEnabled);
         editTextPath.setEnabled(isEnabled);
+        buttonExportLog.setEnabled(isEnabled);
     }
 
     private String getFileNameFromUri(Uri uri) {

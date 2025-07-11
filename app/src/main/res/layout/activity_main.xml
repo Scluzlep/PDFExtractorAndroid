@@ -46,6 +46,12 @@
         android:text="处理日志:"
         android:textStyle="bold" />
 
+    <Button
+        android:id="@+id/button_export_log"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="导出日志" />
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
