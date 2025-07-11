@@ -182,6 +182,21 @@ public class MainActivity extends AppCompatActivity {
                         }
                     }
 
+                    // --- START: MODIFIED BLOCK ---
+                    // 1. 统计所有图片总数，用于后续动态补零
+                    logMessage("正在统计图片总数...");
+                    int totalImages = 0;
+                    for (PDPage page : document.getPages()) {
+                        PDResources resources = page.getResources();
+                        for (COSName cosName : resources.getXObjectNames()) {
+                            if (resources.getXObject(cosName) instanceof PDImageXObject) {
+                                totalImages++;
+                            }
+                        }
+                    }
+                    logMessage("共找到 " + totalImages + " 张图片。");
+                    int numDigits = Math.max(1, String.valueOf(totalImages).length()); // 至少1位
+
                     int imageCounter = 1;
                     for (int i = 0; i < document.getNumberOfPages(); i++) {
                         PDPage page = document.getPage(i);
@@ -192,25 +207,28 @@ public class MainActivity extends AppCompatActivity {
                             PDXObject xObject = resources.getXObject(cosName);
                             if (xObject instanceof PDImageXObject) {
                                 PDImageXObject image = (PDImageXObject) xObject;
-                                String sanitizedTitle = title.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+
+                                // 2. 去掉书签中已有的序号，并清理非法字符
+                                String cleanedTitle = title.replaceFirst("^\\d+[- ]*", "").trim();
+                                String sanitizedTitle = cleanedTitle.replaceAll("[\\\\/:*?\"<>|]", "_");
+
+                                // 3. 动态补零并生成文件名
+                                String imageNumberStr = String.format(Locale.US, "%0" + numDigits + "d", imageCounter);
                                 String suffix = image.getSuffix() != null ? image.getSuffix() : "jpg";
-                                String fileName = String.format(Locale.US, "%03d-%s.%s", imageCounter++, sanitizedTitle, suffix);
+                                String fileName = imageNumberStr + "-" + sanitizedTitle + "." + suffix;
                                 File outputFile = new File(outputDir, fileName);
 
-                                // 保持 PNG/JPEG 输出，解码后立即释放 Bitmap
+                                // 4. 保持 PNG/JPEG 输出，解码后立即释放 Bitmap
                                 try {
                                     Bitmap bitmap = image.getImage();
                                     if (bitmap != null) {
-                                        Bitmap.CompressFormat format = Bitmap.CompressFormat.JPEG;
-                                        if ("png".equalsIgnoreCase(suffix)) {
-                                            format = Bitmap.CompressFormat.PNG;
-                                        }
+                                        Bitmap.CompressFormat format = "png".equalsIgnoreCase(suffix)
+                                                ? Bitmap.CompressFormat.PNG
+                                                : Bitmap.CompressFormat.JPEG;
                                         try (OutputStream out = new FileOutputStream(outputFile)) {
                                             bitmap.compress(format, 95, out);
                                         }
-                                        // ★ 立刻回收，降低 native-heap 峰值
                                         bitmap.recycle();
-                                        bitmap = null;
                                         logMessage("已保存: " + outputFile.getName());
                                     } else {
                                         logMessage("警告: 无法解码图片 " + cosName.getName());
@@ -218,9 +236,12 @@ public class MainActivity extends AppCompatActivity {
                                 } catch (IOException e) {
                                     logMessage("错误: 保存图片时发生 IO 异常 " + outputFile.getName() + " - " + e.getMessage());
                                 }
+
+                                imageCounter++;
                             }
                         }
                     }
+                    // --- END: MODIFIED BLOCK ---
                     logMessage("\n处理完成！");
                 }
             } catch (Exception e) { // 捕获所有可能的异常
@@ -257,6 +278,7 @@ public class MainActivity extends AppCompatActivity {
             textViewLog.setText(logBuffer.toString());
             // 滚动到底部，方便查看最新日志
             textViewLog.post(() -> {
+                if (textViewLog.getLayout() == null) return;
                 int scrollAmount = textViewLog.getLayout().getLineTop(textViewLog.getLineCount()) - textViewLog.getHeight();
                 if (scrollAmount > 0)
                     textViewLog.scrollTo(0, scrollAmount);
